@@ -211,7 +211,8 @@ class BaseUser(_BaseUser):
         channel: :class:`abc.GuildChannel`
             The channel to check your permissions for.
         """
-        return channel.permissions_for(self)
+        member = channel.guild.get_member(self.id)
+        return channel.permissions_for(member)
 
     @property
     def created_at(self):
