@@ -210,6 +210,7 @@ class VoiceConnectionState:
 
         self._state: ConnectionFlowState = ConnectionFlowState.disconnected
         self._expecting_disconnect: bool = False
+        self._external_disconnect: bool = False
         self._connected = threading.Event()
         self._state_event = asyncio.Event()
         self._disconnected = asyncio.Event()
@@ -263,6 +264,7 @@ class VoiceConnectionState:
                 self._expecting_disconnect = False
             else:
                 _log.debug('We were externally disconnected from voice.')
+                self._external_disconnect = True
                 await self.disconnect()
 
             return
@@ -449,7 +451,7 @@ class VoiceConnectionState:
                 self.socket.close()
 
             # Skip this part if disconnect was called from the poll loop task
-            if self._runner and asyncio.current_task() != self._runner:
+            if self._runner and asyncio.current_task() != self._runner and not self._external_disconnect:
                 # Wait for the voice_state_update event confirming the bot left the voice channel.
                 # This prevents a race condition caused by disconnecting and immediately connecting again.
                 # The new VoiceConnectionState object receives the voice_state_update event containing channel=None while still
@@ -459,7 +461,7 @@ class VoiceConnectionState:
                         await self._disconnected.wait()
                 except TimeoutError:
                     _log.debug('Timed out waiting for disconnect confirmation event')
-
+            
             if cleanup:
                 self.voice_client.cleanup()
 
@@ -592,9 +594,10 @@ class VoiceConnectionState:
                     if exc.code == 4014:
                         _log.info('Disconnected from voice by force... potentially reconnecting.')
                         successful = await self._potential_reconnect()
-                        if not successful:
+                        if successful is False:
                             _log.info('Reconnect was unsuccessful, disconnecting from voice normally...')
-                            await self.disconnect()
+                            if not self._external_disconnect:
+                                await self.disconnect()
                             break
                         else:
                             continue
@@ -623,7 +626,7 @@ class VoiceConnectionState:
                     _log.warning('Could not connect to voice... Retrying...')
                     continue
 
-    async def _potential_reconnect(self) -> bool:
+    async def _potential_reconnect(self) -> bool | None:
         try:
             await self._wait_for_state(
                 ConnectionFlowState.got_voice_server_update, ConnectionFlowState.got_both_voice_updates, timeout=self.timeout
